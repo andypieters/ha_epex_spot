@@ -61,8 +61,12 @@ class Nordpool:
 
         json_data = await self._fetch_data()
         marketdata = self._extract_marketdata(json_data)
-        json_data = await self._fetch_data(fetch_date=date.today() + timedelta(days=1))
-        marketdata.extend(self._extract_marketdata(json_data))
+        try:
+            json_data = await self._fetch_data(fetch_date=date.today() + timedelta(days=1))
+            marketdata.extend(self._extract_marketdata(json_data))
+        except:
+            pass
+
 
         #
         # Compress if user requests coarser data
