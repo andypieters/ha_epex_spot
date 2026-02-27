@@ -1,0 +1,110 @@
+"""Energy-Charts API Client."""
+
+from datetime import date, datetime, timezone, timedelta
+import logging
+import aiohttp
+from typing import List
+
+from ...common import Marketprice, average_marketdata
+
+_LOGGER = logging.getLogger(__name__)
+
+BIDDING_ZONES = {
+    "EE", "LT", "LV", "AT", "BE", "FR", "GER", "NL", "PL", "DK1", "DK2", "FI", "NO1", "NO2", "NO3", "NO4", "NO5", "SE1",
+    "SE2", "SE3", "SE4"
+}
+
+
+class Nordpool:
+    """Client for Nordpool day-ahead electricity prices."""
+
+    URL = "https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices"
+
+    MARKET_AREAS = BIDDING_ZONES
+
+    SUPPORTED_DURATIONS = (15, 60)
+
+    def __init__(self, market_area: str, duration: int, session: aiohttp.ClientSession):
+        if market_area not in self.MARKET_AREAS:
+            raise ValueError(f"Unsupported bidding zone: {market_area}")
+
+        if duration not in self.SUPPORTED_DURATIONS:
+            raise ValueError(f"Unsupported duration: {duration}")
+
+        self._session = session
+        self._market_area = market_area
+        self._duration = duration
+        self._marketdata: List[Marketprice] = []
+
+    @property
+    def name(self):
+        return "Nordpool API"
+
+    @property
+    def market_area(self):
+        return self._market_area
+
+    @property
+    def duration(self):
+        return self._duration
+
+    @property
+    def currency(self):
+        return "EUR"
+
+    @property
+    def marketdata(self):
+        return self._marketdata
+
+    async def fetch(self):
+        base_duration = 15
+
+        json_data = await self._fetch_data()
+        marketdata = self._extract_marketdata(json_data)
+        json_data = await self._fetch_data(fetch_date=date.today() + timedelta(days=1))
+        marketdata.extend(self._extract_marketdata(json_data))
+
+        #
+        # Compress if user requests coarser data
+        #
+        if self._duration != base_duration:
+            _LOGGER.debug(
+                "Averaging market data from %d to %d minutes",
+                base_duration,
+                self._duration,
+            )
+            marketdata = average_marketdata(marketdata, self._duration)
+
+        self._marketdata = marketdata
+
+    #
+    # HTTP request
+    #
+    async def _fetch_data(self, fetch_date: date = date.today()):
+        params = {
+            "deliveryArea": self._market_area,
+            "date": fetch_date.isoformat(),
+            "market": "DayAhead",
+            "currency": self.currency,
+        }
+
+        async with self._session.get(self.URL, params=params) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    #
+    # Convert raw JSON arrays to Marketprice objects
+    #
+    def _extract_marketdata(
+            self, data
+    ) -> List[Marketprice]:
+        extract: List[Marketprice] = []
+
+        for i in data['multiAreaEntries']:
+            start_utc = datetime.fromisoformat(i['deliveryStart'].replace('Z', '+00:00'))
+            end_utc = datetime.fromisoformat(i['deliveryEnd'].replace('Z', '+00:00'))
+            duration = int((end_utc - start_utc).total_seconds() / 60)
+            price = (i['entryPerArea']['NL']) / 1000
+            extract.append(Marketprice(start_time=start_utc, duration=duration, price=price))
+
+        return extract
