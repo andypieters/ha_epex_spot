@@ -1,4 +1,4 @@
-"""Energy-Charts API Client."""
+"""Nordpool API Client."""
 
 from datetime import date, datetime, timezone, timedelta
 import logging
