@@ -17,12 +17,11 @@ BIDDING_ZONES = {
 
 class Nordpool:
     """Client for Nordpool day-ahead electricity prices."""
-
-    URL = "https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices"
+    URL = "https://dataportal-api.nordpoolgroup.com/api/DayAheadPriceIndices"
 
     MARKET_AREAS = BIDDING_ZONES
 
-    SUPPORTED_DURATIONS = (15, 60)
+    SUPPORTED_DURATIONS = (15, 30, 60)
 
     def __init__(self, market_area: str, duration: int, session: aiohttp.ClientSession):
         if market_area not in self.MARKET_AREAS:
@@ -57,8 +56,6 @@ class Nordpool:
         return self._marketdata
 
     async def fetch(self):
-        base_duration = 15
-
         json_data = await self._fetch_data()
         marketdata = self._extract_marketdata(json_data)
         try:
@@ -67,18 +64,6 @@ class Nordpool:
         except:
             pass
 
-
-        #
-        # Compress if user requests coarser data
-        #
-        if self._duration != base_duration:
-            _LOGGER.debug(
-                "Averaging market data from %d to %d minutes",
-                base_duration,
-                self._duration,
-            )
-            marketdata = average_marketdata(marketdata, self._duration)
-
         self._marketdata = marketdata
 
     #
@@ -86,9 +71,10 @@ class Nordpool:
     #
     async def _fetch_data(self, fetch_date: date = date.today()):
         params = {
-            "deliveryArea": self._market_area,
+            "indexNames": self._market_area,
             "date": fetch_date.isoformat(),
             "market": "DayAhead",
+            "resolutionInMinutes": self._duration,
             "currency": self.currency,
         }
 
@@ -97,14 +83,14 @@ class Nordpool:
             return await resp.json()
 
     #
-    # Convert raw JSON arrays to Marketprice objects
+    # Convert raw JSON array to Marketprice objects
     #
     def _extract_marketdata(
             self, data
     ) -> List[Marketprice]:
         extract: List[Marketprice] = []
 
-        for i in data['multiAreaEntries']:
+        for i in data['multiIndexEntries']:
             start_utc = datetime.fromisoformat(i['deliveryStart'].replace('Z', '+00:00'))
             end_utc = datetime.fromisoformat(i['deliveryEnd'].replace('Z', '+00:00'))
             duration = int((end_utc - start_utc).total_seconds() / 60)
