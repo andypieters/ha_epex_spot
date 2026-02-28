@@ -1,11 +1,11 @@
 """Nordpool API Client."""
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
 import logging
 import aiohttp
-from typing import List
+from typing import List, Optional
 
-from ...common import Marketprice, average_marketdata
+from ...common import Marketprice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,20 +56,27 @@ class Nordpool:
         return self._marketdata
 
     async def fetch(self):
-        json_data = await self._fetch_data()
-        marketdata = self._extract_marketdata(json_data)
         try:
-            json_data = await self._fetch_data(fetch_date=date.today() + timedelta(days=1))
+            today = datetime.now(timezone.utc).date()
+            json_data = await self._fetch_data(fetch_date=today)
+            marketdata = self._extract_marketdata(json_data)
+        except Exception as err:
+            _LOGGER.debug("Unexpected error fetching today data: %s", err)
+            raise
+
+        try:
+            tomorrow = today + timedelta(days=1)
+            json_data = await self._fetch_data(fetch_date=tomorrow)
             marketdata.extend(self._extract_marketdata(json_data))
-        except:
-            pass
+        except Exception as err:
+            _LOGGER.debug("Unexpected error fetching tomorrow data: %s", err)
 
         self._marketdata = marketdata
 
     #
     # HTTP request
     #
-    async def _fetch_data(self, fetch_date: date = date.today()):
+    async def _fetch_data(self, fetch_date: date):
         params = {
             "indexNames": self._market_area,
             "date": fetch_date.isoformat(),
@@ -90,11 +97,16 @@ class Nordpool:
     ) -> List[Marketprice]:
         extract: List[Marketprice] = []
 
-        for i in data['multiIndexEntries']:
-            start_utc = datetime.fromisoformat(i['deliveryStart'].replace('Z', '+00:00'))
-            end_utc = datetime.fromisoformat(i['deliveryEnd'].replace('Z', '+00:00'))
+        entries = data.get("multiIndexEntries", [])
+        for entry in entries:
+            entry_per_area = entry.get("entryPerArea", {})
+            if self._market_area not in entry_per_area:
+                continue
+
+            start_utc = datetime.fromisoformat(entry['deliveryStart'].replace('Z', '+00:00'))
+            end_utc = datetime.fromisoformat(entry['deliveryEnd'].replace('Z', '+00:00'))
             duration = int((end_utc - start_utc).total_seconds() / 60)
-            price = (i['entryPerArea'][self._market_area]) / 1000
+            price = (entry_per_area[self._market_area]) / 1000
             extract.append(Marketprice(start_time=start_utc, duration=duration, price=price))
 
         return extract
